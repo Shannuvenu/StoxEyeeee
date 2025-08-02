@@ -23,3 +23,8 @@ def get_stock_data(symbol, period="5d", interval="1d"):
     except Exception as e:
         st.error(f"❌ Error fetching data for {symbol}: {e}")
         return None
+def get_realtime_price(symbol):
+    data = yf.download(symbol, period="1d", interval="1m")
+    if not data.empty and "Close" in data.columns:
+        return float(data["Close"].iloc[-1]) 
+    return None
