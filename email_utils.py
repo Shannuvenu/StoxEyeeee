@@ -1,22 +1,18 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os
+import resend
+from dotenv import load_dotenv
+load_dotenv()
+resend.api_key = os.getenv("RESEND_API_KEY")
 
-def send_email_report(to_email, subject, message_body, from_email, from_password):
+def send_email_report(to_email, subject, html_content):
     try:
-        msg = MIMEMultipart()
-        msg["From"] = from_email
-        msg["To"] = to_email
-        msg["Subject"] = subject
-
-        msg.attach(MIMEText(message_body, "plain"))
-
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(from_email, from_password)
-        server.sendmail(from_email, to_email, msg.as_string())
-        server.quit()
-
-        return True
+        params = {
+            "from": "StoxEye <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content
+        }
+        result = resend.Emails.send(params)
+        return True if result.get("id") else False
     except Exception as e:
-        return str(e)
+        return f"Error: {e}"
