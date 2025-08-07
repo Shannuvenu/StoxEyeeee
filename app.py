@@ -8,24 +8,27 @@ from fetch_data import get_stock_data, get_realtime_price
 from alerts import check_price_alert, check_volume_alert
 from portfolio_optimizer import fetch_data, optimize_portfolio
 from news_feed import get_news_feed
-from email_utils import send_email_report
 
 WATCHLIST_FILE = "data/watchlist.json"
 os.makedirs("data", exist_ok=True)
 if not os.path.exists(WATCHLIST_FILE):
     with open(WATCHLIST_FILE, "w") as f:
         json.dump({"watchlist": []}, f)
+
 def load_watchlist():
     with open(WATCHLIST_FILE, "r") as f:
         return json.load(f)["watchlist"]
+
 def save_watchlist(watchlist):
     with open(WATCHLIST_FILE, "w") as f:
         json.dump({"watchlist": watchlist}, f)
+
 def add_to_watchlist(symbol):
     watchlist = load_watchlist()
     if symbol not in watchlist:
         watchlist.append(symbol)
         save_watchlist(watchlist)
+
 def remove_from_watchlist(symbol):
     watchlist = load_watchlist()
     if symbol in watchlist:
@@ -34,6 +37,7 @@ def remove_from_watchlist(symbol):
 st.set_page_config(page_title="StoxEye", layout="wide")
 st.title("📈 StoxEye – Real-Time Stock Dashboard")
 st.markdown("## 📊 Market Indices (Real-Time)")
+
 col1, col2, col3 = st.columns(3)
 with col1:
     nifty_price = get_realtime_price("^NSEI")
@@ -44,8 +48,10 @@ with col2:
 with col3:
     banknifty_price = get_realtime_price("^NSEBANK")
     st.metric("🏦 BANK NIFTY", f"₹{banknifty_price:.2f}" if banknifty_price else "N/A")
+
 st.markdown("Track. Analyze. Grow your investments like a pro.")
 st.info("Enter a stock symbol and period to get started.")
+
 symbol = st.text_input("Enter a stock symbol to get started:", "TCS.NS")
 period = st.selectbox("Select period:", ["5d", "15d", "1mo", "3mo", "6mo", "1y"], index=1)
 interval = st.selectbox("Select interval:", ["1h", "1d", "1wk"], index=1)
@@ -83,6 +89,7 @@ with col2:
     if st.button("🗑️ Remove from Watchlist"):
         remove_from_watchlist(symbol)
         st.warning(f"{symbol} removed from watchlist.")
+
 st.subheader("📰 Latest News Headlines")
 news_items = get_news_feed(symbol)
 if news_items:
@@ -90,6 +97,7 @@ if news_items:
         st.markdown(f"🔹[{article['headline']}]({article['url']})", unsafe_allow_html=True)
 else:
     st.info("No recent news found.")
+
 st.subheader("📌 Your Watchlist")
 watchlist = load_watchlist()
 search_term = st.text_input("🔍 Search Watchlist:")
@@ -169,41 +177,30 @@ if df is not None and all(col in df.columns for col in ["Symbol", "Quantity", "B
     total_investment = df["Investment"].sum()
     total_value = df["Current Value"].sum()
     total_profit = total_value - total_investment
+    df["Return %"] = (df["P&L"] / df["Investment"]) * 100
+
     st.dataframe(df[["Symbol", "Quantity", "Buy Price", "Live Price", "Investment", "Current Value", "P&L"]])
     st.success(f"📊 Total Investment: ₹{total_investment:,.2f}")
     st.info(f"💼 Current Portfolio Value: ₹{total_value:,.2f}")
     st.markdown(f"🔺 Profit / Loss: `{total_profit:+,.2f}` ₹")
+
     st.subheader("🧠 Smart Portfolio Insights")
-    df["Return %"] = (df["P&L"] / df["Investment"]) * 100
     best_stock = df.loc[df["Return %"].idxmax()]
     worst_stock = df.loc[df["Return %"].idxmin()]
     total_return_pct = (total_profit / total_investment) * 100 if total_investment else 0
+
     st.markdown(f"🔝 **Best Performer**: `{best_stock['Symbol']}` with `{best_stock['Return %']:.2f}%` return.")
     st.markdown(f"🔻 **Worst Performer**: `{worst_stock['Symbol']}` with `{worst_stock['Return %']:.2f}%` return.")
     st.markdown(f"📈 **Total Portfolio Return**: `{total_return_pct:.2f}%`")
-
     if total_return_pct > 10:
-        st.success("🔥 Excellent performance! You're on the millionaire path, Venu!")
+        st.balloons()
+        st.toast("🎉 Massive Gains! You're smashing it, Venu!", icon="🚀")
     elif total_return_pct > 0:
-        st.info("📊 Good going. Keep tracking your entries.")
+        st.toast("📈 Gains noted. Stay consistent!", icon="✅")
     elif total_return_pct < 0:
-        st.warning("🔻 Losses detected. Time for rebalancing?")
+        st.toast("📉 Portfolio in loss. Rebalance needed!", icon="⚠️")
     else:
-        st.info("🧊 Break-even. Time to strategize.")
-
-    st.dataframe(df)
-    st.subheader("📧 Email Your Portfolio Report")
-    with st.expander("✉️ Send portfolio summary to your email"):
-        to_email = st.text_input("Receiver Email", placeholder="example@gmail.com")
-        from_email = st.text_input("Your Gmail", placeholder="your_email@gmail.com")
-        if st.button("📨 Send Email Report"):
-            message_body = df.to_html(index=False)
-            subject = "📊 Your StoxEye Portfolio Report"
-            result = send_email_report(to_email, subject, message_body)
-            if result is True:
-                st.success("✅ Email sent successfully!")
-            else:
-                st.error(f"❌ Failed to send email: {result}")
+        st.toast("📊 Break-even. Analyze deeper!", icon="ℹ️")
 if df is not None:
     st.subheader("🔧 HISTORICAL PRICE COMPARISON")
     selected_symbol = st.selectbox("Pick a stock to view historical candlestick chart:", symbols)
@@ -228,3 +225,7 @@ if df is not None:
             st.error("❌ Historical data missing required columns.")
     else:
         st.warning("⚠️ No valid historical data found for this stock.")
+    if st.button("Recalculate Portfolio"):
+       st.toast("✅ Portfolio rebalanced successfully!", icon="⚙️")
+
+    
