@@ -8,6 +8,7 @@ from fetch_data import get_stock_data, get_realtime_price
 from alerts import check_price_alert, check_volume_alert
 from portfolio_optimizer import fetch_data, optimize_portfolio
 from news_feed import get_news_feed
+from institutional_flow import get_flow_dashboard, default_universe
 
 WATCHLIST_FILE = "data/watchlist.json"
 os.makedirs("data", exist_ok=True)
@@ -97,7 +98,50 @@ if news_items:
         st.markdown(f"🔹[{article['headline']}]({article['url']})", unsafe_allow_html=True)
 else:
     st.info("No recent news found.")
-
+st.subheader("⚡ Institutional Power Tracker (Live)")
+universe_choice = st.radio(
+    "Universe:",
+    ["My Watchlist", "Default Largecaps", "Custom"],
+    horizontal=True
+)
+custom_input = ""
+if universe_choice == "My Watchlist":
+    universe = load_watchlist() or []
+elif universe_choice == "Default Largecaps":
+    universe = default_universe()
+else:
+    custom_input = st.text_input("Enter comma-separated symbols (e.g., TCS.NS, RELIANCE.NS, HDFCBANK.NS)")
+    universe = [s.strip().upper() for s in custom_input.split(",") if s.strip()]
+colA, colB = st.columns([1,1])
+with colA:
+    top_n = st.slider("How many top signals to show?", 5, 50, 15, step=5)
+with colB:
+    refresh = st.button("🔄 Refresh Signals")
+if refresh:
+    if not universe:
+        st.warning("Pick at least one symbol (watchlist is empty or custom not provided).")
+    else:
+        flow_df = get_flow_dashboard(universe)
+        st.dataframe(flow_df.head(top_n), use_container_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("###🟢Today’s Strong Buys")
+            buys = flow_df[flow_df["Flow"].isin(["Strong Buy","Buy"])].head(top_n)[["Symbol","Price","DayChange%","VolXAvg","Flow","Score"]]
+            if not buys.empty:
+                st.dataframe(buys, use_container_width=True)
+            else:
+                st.caption("No buy signals right now.")
+        with col2:
+            st.markdown("### 🔴 Today’s Strong Sells")
+            sells = flow_df[flow_df["Flow"].isin(["Strong Sell","Sell"])].head(top_n)[["Symbol","Price","DayChange%","VolXAvg","Flow","Score"]]
+            if not sells.empty:
+                st.dataframe(sells, use_container_width=True)
+            else:
+                st.caption("No sell signals right now.")
+        strong = flow_df[flow_df["Flow"].isin(["Strong Buy","Strong Sell"])].head(3)
+        for _, r in strong.iterrows():
+            direction = "📈" if "Buy" in r["Flow"] else "📉"
+            st.toast(f"{direction} {r['Symbol']} | {r['Flow']} | Δ {r['DayChange%']}% | Vol× {r['VolXAvg']}", icon="⚡")    
 st.subheader("📌 Your Watchlist")
 watchlist = load_watchlist()
 search_term = st.text_input("🔍 Search Watchlist:")
@@ -118,7 +162,6 @@ else:
     except FileNotFoundError:
         df = None
         st.warning("⚠️ Sample file not found. Please upload a CSV.")
-
 if df is not None:
     symbols = df["Symbol"].tolist()
     portfolio_data = fetch_data(symbols)
@@ -128,18 +171,15 @@ if df is not None:
         st.write("### 🧻 Optimal Weights:")
         for sym, w in zip(symbols, result["weights"]):
             st.write(f"- **{sym}**: `{w * 100:.2f}%`")
-
         fig, ax = plt.subplots(figsize=(4, 4))
         ax.pie(result["weights"], labels=symbols, autopct='%1.1f%%', startangle=90)
         ax.axis('equal')
         st.subheader("📊 Portfolio Allocation Pie Chart")
         st.pyplot(fig)
-
         st.write(f"📈 Expected Return: `{result['expected_return']:.2%}`")
         st.write(f"📉 Expected Risk: `{result['expected_risk']:.2%}`")
     else:
         st.error("❌ No data found for the given symbols.")
-
     st.subheader("📊 STOCK COMPARISON GRAPH")
     compare_symbols = st.multiselect("Select stocks to compare price trends:", symbols, default=symbols[:2])
     if compare_symbols:
@@ -173,22 +213,18 @@ if df is not None and all(col in df.columns for col in ["Symbol", "Quantity", "B
             df.at[idx, "Current Value"] = quantity * latest_price
             df.at[idx, "Investment"] = quantity * buy_price
             df.at[idx, "P&L"] = df.at[idx, "Current Value"] - df.at[idx, "Investment"]
-
     total_investment = df["Investment"].sum()
     total_value = df["Current Value"].sum()
     total_profit = total_value - total_investment
     df["Return %"] = (df["P&L"] / df["Investment"]) * 100
-
     st.dataframe(df[["Symbol", "Quantity", "Buy Price", "Live Price", "Investment", "Current Value", "P&L"]])
     st.success(f"📊 Total Investment: ₹{total_investment:,.2f}")
     st.info(f"💼 Current Portfolio Value: ₹{total_value:,.2f}")
     st.markdown(f"🔺 Profit / Loss: `{total_profit:+,.2f}` ₹")
-
     st.subheader("🧠 Smart Portfolio Insights")
     best_stock = df.loc[df["Return %"].idxmax()]
     worst_stock = df.loc[df["Return %"].idxmin()]
     total_return_pct = (total_profit / total_investment) * 100 if total_investment else 0
-
     st.markdown(f"🔝 **Best Performer**: `{best_stock['Symbol']}` with `{best_stock['Return %']:.2f}%` return.")
     st.markdown(f"🔻 **Worst Performer**: `{worst_stock['Symbol']}` with `{worst_stock['Return %']:.2f}%` return.")
     st.markdown(f"📈 **Total Portfolio Return**: `{total_return_pct:.2f}%`")
