@@ -1,52 +1,71 @@
-import yfinance as yf
 import numpy as np
 import pandas as pd
-import cvxpy as cp
+from scipy.optimize import minimize
+import yfinance as yf
 
-def fetch_data(symbols, period="1y"):
-    try:
-        data = yf.download(symbols, period=period, group_by='ticker', auto_adjust=False, threads=True)
+def fetch_data(symbols):
+    """
+    Download adjusted close prices for given symbols (1y daily).
+    Returns a wide DataFrame of Close prices.
+    """
+    df = yf.download(
+        symbols, period="1y", interval="1d",
+        auto_adjust=True, progress=False
+    )["Close"]
 
-        if isinstance(data.columns, pd.MultiIndex):
-            if 'Adj Close' in data.columns.levels[1]:
-                data = data.loc[:, (slice(None), 'Adj Close')]
-            elif 'Close' in data.columns.levels[1]:
-                data = data.loc[:, (slice(None), 'Close')]
-            else:
-                raise ValueError("Neither 'Adj Close' nor 'Close' found in data")
+    if isinstance(df, pd.Series):  
+        df = df.to_frame()
 
-            data.columns = data.columns.droplevel(1)
-        else:
-            if "Adj Close" in data.columns:
-                data = data[["Adj Close"]].rename(columns={"Adj Close": symbols[0]})
-            elif "Close" in data.columns:
-                data = data[["Close"]].rename(columns={"Close": symbols[0]})
-            else:
-                raise ValueError("No valid price columns found")
-        return data.dropna()
-    except Exception as e:
-        print(f"[fetch_data] Error: {e}")
-        return pd.DataFrame()
-def calculate_portfolio_performance(weights, mean_returns, cov_matrix):
-    expected_return = np.dot(weights, mean_returns)
-    expected_risk = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-    return expected_return, expected_risk
-def optimize_portfolio(price_data):
-    returns = price_data.pct_change().dropna()
-    mean_returns = returns.mean()
-    cov_matrix = returns.cov()
-    n = len(mean_returns)
-    weights = cp.Variable(n)
-    objective = cp.Minimize(cp.quad_form(weights, cov_matrix))
-    constraints = [cp.sum(weights) == 1, weights >= 0]
-    problem = cp.Problem(objective, constraints)
-    problem.solve()
-    if weights.value is None:
-        raise ValueError("Optimization failed to produce a valid solution.")
-    optimal_weights = weights.value
-    expected_return, expected_risk = calculate_portfolio_performance(optimal_weights, mean_returns, cov_matrix)
+    df = df.dropna(how="all").ffill().dropna()
+    return df
+
+def _annualized_stats(price_df: pd.DataFrame):
+    """
+    Compute annualized mean returns and covariance from daily returns.
+    """
+    ret = price_df.pct_change().dropna()
+    mu = ret.mean().values * 252.0               
+    cov = ret.cov().values * 252.0               
+    tickers = list(price_df.columns)
+    return mu, cov, tickers
+
+def optimize_portfolio(price_df: pd.DataFrame, target_return=None):
+    """
+    Mean-variance optimization using SciPy (SLSQP):
+      - weights >= 0 (no short)
+      - sum(weights) = 1
+      - if target_return is provided, enforce w @ mu >= target_return
+    Returns dict with weights, expected_return, expected_risk, tickers.
+    """
+    mu, cov, tickers = _annualized_stats(price_df)
+    n = len(tickers)
+
+    def variance(w):
+        return float(w @ cov @ w)
+
+
+    cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    if target_return is not None:
+        cons.append({"type": "ineq", "fun": lambda w, mu=mu: w @ mu - target_return})
+
+
+    bounds = [(0.0, 1.0)] * n
+
+    w0 = np.ones(n) / n
+
+    res = minimize(
+        variance, w0, method="SLSQP",
+        bounds=bounds, constraints=cons,
+        options={"maxiter": 200}
+    )
+
+    w = res.x if res.success else w0
+    port_ret = float(w @ mu)
+    port_vol = float(np.sqrt(w @ cov @ w))
+
     return {
-        "weights": optimal_weights,
-        "expected_return": expected_return,
-        "expected_risk": expected_risk
+        "weights": w,
+        "expected_return": port_ret,
+        "expected_risk": port_vol,
+        "tickers": tickers,
     }
