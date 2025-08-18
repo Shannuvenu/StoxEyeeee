@@ -5,9 +5,10 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
+
 from fetch_data import get_stock_data, get_realtime_price
 from alerts import check_price_alert, check_volume_alert
-from portfolio_optimizer import fetch_data, optimize_portfolio
+from portfolio_optimizer import fetch_data as fetch_portfolio_data, optimize_portfolio
 from news_feed import get_news_feed
 from institutional_flow import get_flow_dashboard, default_universe
 st.set_page_config(page_title="StoxEye", layout="wide")
@@ -312,7 +313,7 @@ else:
 
 if df is not None:
     symbols = df["Symbol"].tolist()
-    portfolio_data = fetch_data(symbols)
+    portfolio_data = fetch_portfolio_data(symbols)
 
     if not portfolio_data.empty:
         result = optimize_portfolio(portfolio_data)
