@@ -312,7 +312,7 @@ else:
                 if st.button("Delete", key=f"del_{g['id']}"):
                     remove_goal(g["id"])
                     st.toast("Goal removed.", icon="🗑️")
-                    st.experimental_rerun()
+                    st.rerun()
 
 # -------- Historical Candles --------
 if df is not None:
