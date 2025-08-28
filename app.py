@@ -12,9 +12,19 @@ from alerts import check_price_alert, check_volume_alert
 from portfolio_optimizer import fetch_data, optimize_portfolio
 from news_feed import get_news_feed
 from institutional_flow import get_flow_dashboard, default_universe
+from advisor import analyze_stock
+
 
 # NEW: Goals
 from goals import load_goals, add_goal, remove_goal, evaluate_goal
+from risk_utils import (
+    get_sector_map,
+    sector_exposure,
+    position_weights,
+    estimate_volatility,
+    build_risk_summary,
+)
+
 
 # ---------------- Watchlist Setup ----------------
 WATCHLIST_FILE = "data/watchlist.json"
@@ -93,6 +103,27 @@ if symbol:
         if v_alert: st.info(v_alert)
     else:
         st.error("No data found for this symbol.")
+# === Buy/Sell/Hold Advisory ===
+from risk_utils import estimate_volatility
+
+if data is not None and not data.empty:
+    vol = estimate_volatility(symbol, lookback="6mo", interval="1d")
+
+    alerts_dict = {
+        "price": check_price_alert(data),
+        "volume": check_volume_alert(data),
+    }
+    signal, reason = analyze_stock(data, symbol, alerts_dict, vol)
+
+    if signal == "BUY":
+        st.success(f"🟢 BUY Signal for {symbol} → {reason}")
+    elif signal == "SELL":
+        st.error(f"🔴 SELL Signal for {symbol} → {reason}")
+    else:
+        st.info(f"⚪ HOLD Signal for {symbol} → {reason}")
+
+    st.caption("⚠️ Analysis is educational only. Not financial advice.")
+
 
 # -------- Watchlist Controls --------
 c1, c2 = st.columns(2)
@@ -200,6 +231,16 @@ if df is not None:
         st.write(f"📉 Expected Risk: `{result['expected_risk']:.2%}`")
     else:
         st.error("❌ No data found for the given symbols.")
+# --- after you've created df (either from upload or sample) ---
+required_cols = {"Symbol", "Quantity", "Buy Price"}
+
+if df is not None and not df.empty:
+    # Optional: validate columns early
+    if required_cols.issubset(df.columns):
+        st.session_state["portfolio_df"] = df
+    else:
+        st.warning("Portfolio CSV must include columns: Symbol, Quantity, and Buy Price.")
+
 
     # Comparison
     st.subheader("📊 STOCK COMPARISON GRAPH")
@@ -260,6 +301,138 @@ if df is not None and all(col in df.columns for col in ["Symbol", "Quantity", "B
     st.markdown(f"📈 **Total Portfolio Return**: `{total_return_pct:.2f}%`")
 else:
     st.warning("Portfolio CSV must include columns: `Symbol`, `Quantity`, and `Buy Price`.")
+# -------------------- 🛡️ RISK DASHBOARD (Beta) --------------------
+st.subheader("🛡️ Risk Dashboard (Beta)")
+
+required_cols = {"Symbol", "Quantity", "Buy Price"}
+
+# Prefer the portfolio you already built; fall back to df
+base = (
+    st.session_state.get("portfolio_df").copy()
+    if "portfolio_df" in st.session_state
+    else (df.copy() if df is not None else None)
+)
+
+# Guard: need a portfolio with the required columns
+if base is None or base.empty or not required_cols.issubset(base.columns):
+    st.info("Upload a portfolio CSV above (with Symbol, Quantity, Buy Price) to see risk metrics.")
+    st.stop()
+
+# Ensure we have a live price and current value for risk calcs
+if "Live Price" not in base.columns or base["Live Price"].isna().all():
+    # Try to fill live prices now (best-effort)
+    base["Live Price"] = 0.0
+    for i, r in base.iterrows():
+        sym = str(r["Symbol"]).upper()
+        live = get_stock_data(sym, period="1d", interval="1h")
+        if live is not None and not live.empty:
+            base.at[i, "Live Price"] = float(live["Close"].iloc[-1])
+
+# Build 'port' used by the rest of the dashboard
+port = base.copy()
+port["Quantity"] = port["Quantity"].astype(float)
+port["Live Price"] = port["Live Price"].astype(float)
+port["Current Value"] = port["Quantity"] * port["Live Price"]
+
+# Nothing to show if still zero (no live prices could be fetched)
+if port["Current Value"].sum() <= 0:
+    st.info("Could not fetch live prices right now. Try again later.")
+    st.stop()
+
+symbols_in_port = (
+    port["Symbol"].astype(str).str.upper().tolist()
+    if "Symbol" in port.columns else []
+)
+
+# Sector map + exposure
+with st.spinner("Fetching sector classification…"):
+    sec_map = get_sector_map(symbols_in_port)
+    sec_df = sector_exposure(port, sec_map)
+
+# Position weights (for concentration checks)
+w = position_weights(port)
+
+# Volatility (cached; computed per symbol)
+with st.spinner("Estimating volatility…"):
+    vol_map = {s: estimate_volatility(s, lookback="6mo", interval="1d") for s in symbols_in_port}
+
+# ===== Visuals =====
+c1, c2 = st.columns(2)
+
+with c1:
+    st.markdown("**Sector Allocation**")
+    if not sec_df.empty:
+        fig = go.Figure(data=[
+            go.Pie(labels=sec_df["Sector"], values=sec_df["Value"],
+                   hole=0.35, textinfo="label+percent")
+        ])
+        fig.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.caption("No sector data available.")
+
+with c2:
+    st.markdown("**Position Weights**")
+    if not w.empty:
+        fig2 = go.Figure(data=[
+            go.Bar(x=w.index.tolist(), y=w.values.tolist(),
+                   hovertemplate="%{x}: %{y:.2f}%<extra></extra>")
+        ])
+        fig2.update_layout(
+            yaxis_title="Weight (%)",
+            xaxis_title="Symbol",
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.caption("No positions to display.")
+
+# Detailed table
+tbl = port[["Symbol", "Quantity", "Live Price", "Current Value"]].copy()
+tbl["Weight %"] = tbl["Symbol"].map(w.to_dict())
+tbl["Sector"] = tbl["Symbol"].map(sec_map).fillna("Unknown")
+tbl["Volatility % (Ann)"] = tbl["Symbol"].map(vol_map)
+
+st.markdown("**Position Details**")
+st.dataframe(
+    tbl.sort_values("Weight %", ascending=False)
+       .rename(columns={"Current Value": "Current Value (₹)"})
+       .style.format({
+           "Live Price": "₹{:.2f}",
+           "Current Value (₹)": "₹{:.2f}",
+           "Weight %": "{:.2f}%",
+           "Volatility % (Ann)": "{:.1f}%"
+       }),
+    use_container_width=True
+)
+
+# Risk summary
+msgs = build_risk_summary(w, sec_df, vol_map)
+for level, msg in msgs:
+    if level == "error":
+        st.error(msg)
+    elif level == "warning":
+        st.warning(msg)
+    else:
+        st.info(msg)
+
+st.caption("⚠️ Educational analysis only — not investment advice. Markets carry risk.")
+# -------------------------------------------------------------------
+
+
+# Risk summary
+msgs = build_risk_summary(w, sec_df, vol_map)
+for level, msg in msgs:
+    if level == "error":
+        st.error(msg)
+    elif level == "warning":
+        st.warning(msg)
+    else:
+        st.info(msg)
+
+st.caption("⚠️ Educational analysis only — not investment advice. Markets carry risk.")
+# -------------------------------------------------------------------
+
 
 # -------- 🎯 Goal-Linked Investing (NEW) --------
 st.subheader("🎯 Goal-Linked Investing (Beta)")
